@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}예산·목표 설정{% endblock %}
+{% block content %}
+<div>
+  <h1 class="title">예산·목표 설정</h1>
+  <p class="muted small">AI가 "사도 될지" 판단하는 기준이에요.</p>
+</div>
+
+<form class="card" id="settings-form" novalidate>
+  <div class="field">
+    <label for="monthly_budget">한 달 예산 (원)</label>
+    <input class="input" id="monthly_budget" name="monthly_budget" inputmode="numeric"
+           placeholder="500000" value="{{ setting.monthly_budget if setting else '' }}" required>
+  </div>
+  <div class="field">
+    <label for="goal_name">모으고 싶은 목표</label>
+    <input class="input" id="goal_name" name="goal_name" maxlength="50"
+           placeholder="노트북" value="{{ setting.goal_name if setting else '' }}" required>
+  </div>
+  <div class="row-2">
+    <div class="field">
+      <label for="goal_amount">목표 금액 (원)</label>
+      <input class="input" id="goal_amount" name="goal_amount" inputmode="numeric"
+             placeholder="1500000" value="{{ setting.goal_amount if setting else '' }}" required>
+    </div>
+    <div class="field">
+      <label for="goal_deadline">목표 날짜</label>
+      <input class="input" id="goal_deadline" name="goal_deadline" type="date"
+             value="{{ setting.goal_deadline.isoformat() if setting else '' }}" required>
+    </div>
+  </div>
+  <div class="field">
+    <label for="tone">잔소리 말투</label>
+    {% set current_tone = setting.tone if setting else 'friend' %}
+    <select class="input" id="tone" name="tone">
+      <option value="friend" {% if current_tone == 'friend' %}selected{% endif %}>다정한 친구 · 부드럽게</option>
+      <option value="mom" {% if current_tone == 'mom' %}selected{% endif %}>엄마 · 걱정 잔소리</option>
+      <option value="roast" {% if current_tone == 'roast' %}selected{% endif %}>독설 · 웃기게 팩폭</option>
+    </select>
+  </div>
+  <div class="alert-error" id="settings-error" role="alert" hidden></div>
+  <button class="btn btn-primary btn-lg btn-block" id="settings-submit" type="submit">저장하고 시작하기</button>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+  const form = document.getElementById("settings-form");
+  const submit = document.getElementById("settings-submit");
+  const errorBox = document.getElementById("settings-error");
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    errorBox.hidden = true;
+    submit.disabled = true;
+    const body = {
+      monthly_budget: form.monthly_budget.value,
+      goal_name: form.goal_name.value,
+      goal_amount: form.goal_amount.value,
+      goal_deadline: form.goal_deadline.value,
+      tone: form.tone.value,
+    };
+    const result = await apiRequest("PUT", "/api/settings", body);
+    submit.disabled = false;
+    if (result.ok) {
+      window.location.href = "/";
+    } else {
+      errorBox.textContent = result.message;
+      errorBox.hidden = false;
+    }
+  });
+</script>
+{% endblock %}

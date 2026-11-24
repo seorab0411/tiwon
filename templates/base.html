@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0b0c">
+  <title>{% block title %}티원{% endblock %} · 티끌 모아 원</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="{{ url_for('home') }}">티원<span class="brand-dot">.</span></a>
+      {% if g.user %}
+      <div class="topbar-actions">
+        <a class="btn btn-sm" href="{{ url_for('settings_page') }}">설정</a>
+        <button class="btn btn-sm" id="logout-btn" type="button">로그아웃</button>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  <script src="{{ url_for('static', filename='api.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

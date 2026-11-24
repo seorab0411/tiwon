@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title %}홈{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="goal-head">
+    <span class="muted small">{{ g.user.username }}님의 목표 · {{ setting.goal_deadline.isoformat() }}까지</span>
+    <span class="goal-name">{{ setting.goal_name }} {{ "{:,}".format(setting.goal_amount) }}원</span>
+  </div>
+  <div class="progress" role="progressbar" aria-label="목표 진행률">
+    <div class="progress-fill" id="goal-bar"></div>
+  </div>
+  <div class="between small">
+    <span class="muted">참아서 모은 돈 <strong class="strong" id="saved-total" style="color: var(--text)">-</strong></span>
+    <strong id="goal-progress">-</strong>
+  </div>
+</section>
+
+<section class="stats">
+  <div class="stat">
+    <span class="muted small">이번 달 쓴 돈</span>
+    <span class="stat-value" id="spent">-</span>
+  </div>
+  <div class="stat">
+    <span class="muted small">남은 예산 <span class="help">/ {{ "{:,}".format(setting.monthly_budget) }}원</span></span>
+    <span class="stat-value" id="remaining">-</span>
+  </div>
+</section>
+
+<section class="card card-accent">
+  <h2 class="section-title">이거 사도 될까?</h2>
+  <form class="stack" id="consult-form" novalidate>
+    <div class="field">
+      <label for="consult-text">무엇을 사려고 해요?</label>
+      <textarea class="input" id="consult-text" name="text" rows="2" maxlength="500"
+                placeholder="예) 배달 치킨 25000원, 친구 생일선물 3만원"></textarea>
+    </div>
+    <div class="row-2">
+      <div class="field">
+        <label for="consult-price">가격 (선택)</label>
+        <input class="input" id="consult-price" name="price" inputmode="numeric" placeholder="25000">
+      </div>
+      <div class="field">
+        <label for="consult-image">캡처·사진 (선택)</label>
+        <input class="input" id="consult-image" name="image" type="file"
+               accept="image/jpeg,image/png,image/webp">
+      </div>
+    </div>
+    <span class="help">글이나 사진 중 하나만 있어도 돼요. 사진은 5MB 이하.</span>
+    <div class="alert-error" id="consult-error" role="alert" hidden></div>
+    <button class="btn btn-primary btn-lg btn-block" id="consult-submit" type="submit">AI에게 물어보기</button>
+  </form>
+</section>
+
+<section class="card" id="result-card" hidden aria-live="polite">
+  <div class="result-head">
+    <div>
+      <div class="result-item" id="result-item"></div>
+      <div class="muted small" id="result-meta"></div>
+    </div>
+    <span class="chip chip-lg" id="result-verdict"></span>
+  </div>
+  <p class="quote" id="result-message"></p>
+  <p class="muted small" id="result-reason"></p>
+  <div class="tiles">
+    <div class="tile">
+      <span class="muted small">사면 목표가</span>
+      <span class="tile-value" id="result-delay"></span>
+    </div>
+    <div class="tile">
+      <span class="muted small">지금 남은 예산</span>
+      <span class="tile-value" id="result-remaining"></span>
+    </div>
+  </div>
+  <div id="result-alternatives-box">
+    <p class="small strong">이렇게 해보면 어때요?</p>
+    <ul class="alts" id="result-alternatives"></ul>
+  </div>
+  <div class="actions">
+    <button class="btn btn-lg" id="result-bought" type="button">샀어요</button>
+    <button class="btn btn-primary btn-lg" id="result-skipped" type="button">참았어요</button>
+  </div>
+</section>
+
+<section class="stack">
+  <h2 class="section-title">이번 달 어디에 썼나</h2>
+  <div class="bars" id="category-chart"></div>
+</section>
+
+<section class="stack">
+  <h2 class="section-title">이번 달 상담 기록</h2>
+  <ul class="list" id="history"></ul>
+</section>
+
+<p class="footnote">AI 판단은 참고용이에요. 결정은 직접 해 주세요.</p>
+{% endblock %}
+{% block scripts %}
+<script>
+  const VERDICT = {
+    BUY: { label: "사도 돼", cls: "chip-buy" },
+    CONDITIONAL: { label: "조건부", cls: "chip-conditional" },
+    SKIP: { label: "참아", cls: "chip-skip" },
+  };
+  const DECISION = { BOUGHT: "샀음", SKIPPED: "참음" };
+
+  // 화면에 글을 넣을 땐 항상 textContent (AI 답변 속 HTML이 실행되지 않게)
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function verdictOf(code) {
+    return VERDICT[code] || { label: code, cls: "chip-plain" };
+  }
+
+  async function loadSummary() {
+    const result = await apiRequest("GET", "/api/summary");
+    if (!result.ok) return;
+    const s = result.data;
+    document.getElementById("saved-total").textContent = won(s.saved_total);
+    document.getElementById("goal-progress").textContent = s.goal_progress + "%";
+    document.getElementById("goal-bar").style.width = Math.min(s.goal_progress, 100) + "%";
+    document.getElementById("spent").textContent = won(s.spent);
+    const remaining = document.getElementById("remaining");
+    remaining.textContent = won(s.remaining_budget);
+    remaining.classList.toggle("danger", s.remaining_budget < 0);
+
+    const chart = document.getElementById("category-chart");
+    chart.replaceChildren();
+    if (s.by_category.length === 0) {
+      chart.appendChild(el("p", "muted small", "아직 산 기록이 없어요."));
+      return;
+    }
+    const max = Math.max(...s.by_category.map((c) => c.amount), 1);
+    s.by_category.forEach((c) => {
+      const row = el("div", "bar-row");
+      const label = el("div", "between");
+      label.appendChild(el("span", "", c.category + " " + c.count + "회"));
+      label.appendChild(el("span", "strong", won(c.amount)));
+      const bar = el("div", "progress");
+      const fill = el("div", "progress-fill thin");
+      fill.style.width = (c.amount / max) * 100 + "%";
+      bar.appendChild(fill);
+      row.appendChild(label);
+      row.appendChild(bar);
+      chart.appendChild(row);
+    });
+  }
+
+  function showError(message) {
+    const box = document.getElementById("consult-error");
+    box.textContent = message;
+    box.hidden = false;
+  }
+
+  async function decide(consultId, decision) {
+    const result = await apiRequest("PATCH", "/api/consults/" + consultId + "/decision", { decision: decision });
+    if (!result.ok) {
+      showError(result.message);
+      return false;
+    }
+    await Promise.all([loadSummary(), loadHistory()]);
+    return true;
+  }
+
+  async function loadHistory() {
+    const result = await apiRequest("GET", "/api/consults");
+    if (!result.ok) return;
+    const list = document.getElementById("history");
+    list.replaceChildren();
+    if (result.data.consults.length === 0) {
+      list.appendChild(el("li", "list-empty", "아직 상담 기록이 없어요."));
+      return;
+    }
+    result.data.consults.forEach((c) => {
+      const item = el("li", "list-item");
+      const main = el("div", "list-main");
+      main.appendChild(el("span", "list-title", c.item_name));
+      const day = c.created_at ? c.created_at.slice(5, 10).replace("-", "/") : "";
+      main.appendChild(el("span", "muted small", day + " · " + won(c.actual_price ?? c.price) + " · " + c.category));
+      const side = el("div", "list-side");
+      const v = verdictOf(c.verdict);
+      side.appendChild(el("span", "chip " + v.cls, v.label));
+      if (c.decision) {
+        side.appendChild(el("span", "chip chip-plain", DECISION[c.decision] || c.decision));
+      } else {
+        const bought = el("button", "btn btn-sm", "샀음");
+        bought.type = "button";
+        bought.addEventListener("click", () => decide(c.consult_id, "BOUGHT"));
+        const skipped = el("button", "btn btn-sm btn-primary", "참음");
+        skipped.type = "button";
+        skipped.addEventListener("click", () => decide(c.consult_id, "SKIPPED"));
+        side.appendChild(bought);
+        side.appendChild(skipped);
+      }
+      item.appendChild(main);
+      item.appendChild(side);
+      list.appendChild(item);
+    });
+  }
+
+  let currentConsultId = null;
+  const boughtButton = document.getElementById("result-bought");
+  const skippedButton = document.getElementById("result-skipped");
+
+  function showResult(c) {
+    currentConsultId = c.consult_id;
+    const v = verdictOf(c.verdict);
+    document.getElementById("result-item").textContent = c.item_name;
+    document.getElementById("result-meta").textContent = won(c.price) + " · " + c.category;
+    const badge = document.getElementById("result-verdict");
+    badge.className = "chip chip-lg " + v.cls;
+    badge.textContent = v.label;
+    const message = document.getElementById("result-message");
+    message.textContent = c.message || "";
+    message.hidden = !c.message;
+    document.getElementById("result-reason").textContent = c.reason;
+    document.getElementById("result-delay").textContent = c.delay_days + "일 늦어짐";
+    document.getElementById("result-remaining").textContent = won(c.remaining_budget);
+    const alts = document.getElementById("result-alternatives");
+    alts.replaceChildren();
+    c.alternatives.forEach((a) => alts.appendChild(el("li", "", a)));
+    document.getElementById("result-alternatives-box").hidden = c.alternatives.length === 0;
+    boughtButton.disabled = false;
+    skippedButton.disabled = false;
+    const card = document.getElementById("result-card");
+    card.hidden = false;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  async function decideCurrent(decision) {
+    if (currentConsultId === null) return;
+    boughtButton.disabled = true;
+    skippedButton.disabled = true;
+    const done = await decide(currentConsultId, decision);
+    if (done) {
+      document.getElementById("result-card").hidden = true;
+      currentConsultId = null;
+    } else {
+      boughtButton.disabled = false;
+      skippedButton.disabled = false;
+    }
+  }
+  boughtButton.addEventListener("click", () => decideCurrent("BOUGHT"));
+  skippedButton.addEventListener("click", () => decideCurrent("SKIPPED"));
+
+  const form = document.getElementById("consult-form");
+  const submit = document.getElementById("consult-submit");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    document.getElementById("consult-error").hidden = true;
+    const text = document.getElementById("consult-text").value.trim();
+    const price = document.getElementById("consult-price").value.trim();
+    const image = document.getElementById("consult-image").files[0];
+    if (!text && !image) {
+      showError("상담 내용이나 사진 중 하나는 꼭 넣어 주세요.");
+      return;
+    }
+    if (image && image.size > 5 * 1024 * 1024) {
+      showError("사진은 5MB 이하만 올릴 수 있어요.");
+      return;
+    }
+    const data = new FormData();
+    data.append("text", text);
+    data.append("price", price);
+    if (image) data.append("image", image);
+
+    submit.disabled = true;
+    submit.textContent = "AI가 생각하는 중...";
+    const result = await apiRequest("POST", "/api/consults", data);
+    submit.disabled = false;
+    submit.textContent = "AI에게 물어보기";
+    if (!result.ok) {
+      showError(result.message);
+      return;
+    }
+    form.reset();
+    showResult(result.data);
+    loadHistory();
+  });
+
+  loadSummary();
+  loadHistory();
+</script>
+{% endblock %}
