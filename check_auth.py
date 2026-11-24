@@ -14,7 +14,7 @@ results = []
 
 
 def check(name, ok, detail=None):
-    results.append(ok)
+    results.append(bool(ok))
     print(("[통과] " if ok else "[실패] ") + name + ("" if ok else f"  → {detail}"))
 
 

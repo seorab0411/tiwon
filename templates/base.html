@@ -5,12 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b0b0c">
   <title>{% block title %}티원{% endblock %} · 티끌 모아 원</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <meta name="apple-mobile-web-app-title" content="티원">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="{{ url_for('home') }}">티원<span class="brand-dot">.</span></a>
+      <a class="brand" href="{{ url_for('home') }}" aria-label="티원 홈">
+        <svg class="brand-mark" viewBox="4 2 56 56" width="28" height="28" aria-hidden="true">
+    <rect x="6" y="44" width="14" height="12" rx="3" style="fill: var(--primary)"/>
+    <rect x="25" y="30" width="14" height="26" rx="3" style="fill: var(--primary)"/>
+    <rect x="44" y="14" width="14" height="42" rx="3" style="fill: var(--primary)"/>
+    <circle cx="51" cy="6" r="3.5" style="fill: var(--primary)"/>
+  </svg>
+        <span>티원</span>
+      </a>
       {% if g.user %}
       <div class="topbar-actions">
         <a class="btn btn-sm" href="{{ url_for('settings_page') }}">설정</a>

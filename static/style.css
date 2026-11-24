@@ -248,3 +248,12 @@ input[type="file"].input::file-selector-button {
   font: inherit;
   cursor: pointer;
 }
+
+/* 로고: 티끌(작은 점)이 모여 동전(₩)이 되는 모양 */
+.brand { display: inline-flex; align-items: center; gap: 8px; }
+.brand-mark { display: block; flex-shrink: 0; }
+.hero-mark { display: block; }
+
+/* 로고 C. 쌓이는 동전: 로고 글자 '티원'도 빨강 */
+.brand { color: var(--primary); }
+.hero h1 { color: var(--primary); }
