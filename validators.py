@@ -2,7 +2,7 @@
 import re
 from datetime import date, datetime, timedelta, timezone
 
-from models import TONES
+from models import THEMES, TONES
 
 KST = timezone(timedelta(hours=9))  # 한국은 서머타임이 없어서 +9 고정
 
@@ -85,4 +85,27 @@ def validate_settings(data, today=None):
         errors.append("말투는 mom, roast, friend 중 하나여야 해요.")
     clean["tone"] = tone
 
+    return clean, errors
+
+
+MAX_LIMIT = 10_000_000  # 한 번 기준 금액 최대 1,000만 원
+
+
+def validate_focus(value):
+    """줄이고 싶은 지출 테마 검사. 입력: {테마: 기준 금액(숫자·문자·빈값)}. (정리된 값, 오류 목록)"""
+    if not isinstance(value, dict) or not value:
+        return {}, ["줄이고 싶은 지출을 하나 이상 골라 주세요."]
+    clean, errors = {}, []
+    for theme, raw in value.items():
+        if theme not in THEMES:
+            errors.append(f"고를 수 없는 테마예요: {theme}")
+            continue
+        if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+            clean[theme] = None
+            continue
+        amount = to_int(raw)
+        if amount is None or not 1 <= amount <= MAX_LIMIT:
+            errors.append(f"{theme} 기준 금액은 1원 이상 1,000만 원 이하 숫자로 입력해 주세요.")
+            continue
+        clean[theme] = amount
     return clean, errors

@@ -25,7 +25,8 @@ def code_of(resp):
 
 future = (today_kst() + timedelta(days=90)).isoformat()
 good_settings = {"monthly_budget": "500,000", "goal_name": "노트북",
-                 "goal_amount": 1500000, "goal_deadline": future, "tone": "mom"}
+                 "goal_amount": 1500000, "goal_deadline": future, "tone": "mom",
+                 "focus": {"식비·배달": "20,000", "게임": ""}}
 
 c = app.test_client()
 
@@ -46,7 +47,11 @@ r = c.post("/api/auth/signup", json={"username": "ab", "password": "12345678"})
 check("짧은 아이디 거절", r.status_code == 400 and code_of(r) == "INVALID_INPUT")
 r = c.post("/api/auth/signup", json={"username": "tiwon01", "password": "123"})
 check("짧은 비밀번호 거절", r.status_code == 400)
-r = c.post("/api/auth/signup", json={"username": "  TiWon01 ", "password": "password123"})
+r = c.post("/api/auth/signup", json={"username": "tiwon01", "password": "password123",
+                                     "password_confirm": "password12"})
+check("비밀번호 확인이 다르면 가입 거절", r.status_code == 400 and code_of(r) == "PASSWORD_MISMATCH")
+r = c.post("/api/auth/signup", json={"username": "  TiWon01 ", "password": "password123",
+                                     "password_confirm": "password123"})
 check("회원가입 성공 (아이디는 소문자로 정리)",
       r.status_code == 201 and r.get_json()["username"] == "tiwon01", r.get_json())
 with app.app_context():
@@ -70,6 +75,14 @@ r = c.put("/api/settings", json={**good_settings, "monthly_budget": "abc"})
 check("예산이 숫자가 아니면 거절", r.status_code == 400)
 r = c.put("/api/settings", json={**good_settings, "monthly_budget": True})
 check("예산에 true 들어오면 거절", r.status_code == 400)
+r = c.put("/api/settings", json={k: v for k, v in good_settings.items() if k != "focus"})
+check("줄이고 싶은 지출을 안 고르면 거절", r.status_code == 400)
+r = c.put("/api/settings", json={**good_settings, "focus": {}})
+check("줄이고 싶은 지출이 빈 목록이면 거절", r.status_code == 400)
+r = c.put("/api/settings", json={**good_settings, "focus": {"택시": 1000}})
+check("없는 테마는 거절", r.status_code == 400)
+r = c.put("/api/settings", json={**good_settings, "focus": {"게임": "-5"}})
+check("기준 금액이 음수면 거절", r.status_code == 400)
 r = c.put("/api/settings", json={**good_settings, "tone": "angry"})
 check("없는 말투 거절", r.status_code == 400)
 r = c.put("/api/settings", json=good_settings)
@@ -86,6 +99,17 @@ r = c.get("/")
 check("설정 후 홈 열림 + 목표 표시", r.status_code == 200 and "아이패드".encode() in r.data)
 r = c.get("/settings")
 check("설정 화면에 저장값 채워짐", "500000".encode() in r.data and b'value="mom" selected' in r.data)
+check("설정 화면에 고른 테마 체크·기준 금액 채워짐",
+      'value="식비·배달" checked'.encode() in r.data and 'value="20000"'.encode() in r.data
+      and 'value="카페" checked'.encode() not in r.data)
+r = c.get("/api/settings")
+check("설정 조회에 테마·기준 금액 포함",
+      r.get_json().get("focus") == {"식비·배달": 20000, "게임": None}, r.get_json())
+r = c.put("/api/settings", json={**good_settings, "goal_name": "아이패드", "focus": {"카페": 4500}})
+check("테마를 바꾸면 예전 테마는 지워짐", r.get_json().get("focus") == {"카페": 4500}, r.get_json())
+with app.app_context():
+    from models import FocusTheme
+    check("테마 행도 바꾼 것만 남음", FocusTheme.query.count() == 1)
 
 # 5) 로그아웃 / 로그인
 r = c.post("/api/auth/logout")

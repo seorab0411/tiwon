@@ -1,15 +1,15 @@
 """구매 상담·결과 기록·상담 기록·절약 현황 (기능 F-03 ~ F-08)"""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, g, jsonify, request
 from sqlalchemy import func
 
 import gemini_client
 from auth import api_login_required
-from consult_logic import (MAX_IMAGE_BYTES, AIResponseError, apply_guards, build_prompt,
-                           calc_delay_days, daily_saving_target, detect_image_mime,
-                           goal_progress, month_range_utc, parse_ai_response, to_kst,
-                           validate_consult_input)
+from consult_logic import (MAX_IMAGE_BYTES, NAG_DAYS, AIResponseError, apply_guards,
+                           build_prompt, compute_outcomes, daily_saving_target,
+                           detect_image_mime, goal_progress, month_range_utc,
+                           parse_ai_response, to_kst, validate_consult_input)
 from errors import api_error
 from models import DECISIONS, Consult, db
 from validators import to_int, today_kst
@@ -50,6 +50,12 @@ def _by_category(user_id, start, end):
     return sorted(stats, key=lambda s: s["amount"], reverse=True)
 
 
+def _recent_window():
+    """꼽주기용 최근 NAG_DAYS일 범위 (UTC)"""
+    end = datetime.now(timezone.utc)
+    return end - timedelta(days=NAG_DAYS), end
+
+
 def _recent_bought(user_id, start, end, limit=5):
     q = Consult.query.filter(Consult.user_id == user_id, Consult.decision == "BOUGHT")
     rows = _in_month(q, start, end).order_by(Consult.created_at.desc()).limit(limit).all()
@@ -88,8 +94,9 @@ def create_consult():
         return api_error(400, "INVALID_INPUT", "잘못된 요청이에요.")
 
     setting = g.user.setting
-    if setting is None:
-        return api_error(409, "SETTINGS_REQUIRED", "먼저 예산·목표를 설정해 주세요.")
+    focus = g.user.focus_map()
+    if setting is None or not focus:
+        return api_error(409, "SETTINGS_REQUIRED", "먼저 예산·목표와 줄이고 싶은 지출을 설정해 주세요.")
 
     text, price, errors = validate_consult_input(request.form.get("text"),
                                                  request.form.get("price"))
@@ -107,18 +114,20 @@ def create_consult():
             return api_error(400, "INVALID_INPUT", "사진은 jpg, png, webp 파일만 올릴 수 있어요.")
 
     if not text and image_bytes is None:
-        return api_error(400, "INVALID_INPUT", "상담 내용이나 사진 중 하나는 꼭 넣어 주세요.")
+        return api_error(400, "INVALID_INPUT", "사진을 찍거나 상담 내용을 적어 주세요.")
 
     # 숫자 계산은 코드가 먼저 한다
-    _, start, end = month_range_utc()
+    _, month_start, month_end = month_range_utc()
+    recent_start, recent_end = _recent_window()
     today = today_kst()
-    remaining = setting.monthly_budget - _spent(g.user.id, start, end)
+    remaining = setting.monthly_budget - _spent(g.user.id, month_start, month_end)
     daily = daily_saving_target(setting.goal_amount, setting.goal_deadline, today)
+    recent_stats = _by_category(g.user.id, recent_start, recent_end)
 
     prompt = build_prompt(
-        tone=setting.tone, setting=setting, remaining_budget=remaining, daily_target=daily,
-        category_stats=_by_category(g.user.id, start, end),
-        recent_items=_recent_bought(g.user.id, start, end),
+        tone=setting.tone, setting=setting, focus=focus, remaining_budget=remaining,
+        daily_target=daily, recent_stats=recent_stats,
+        recent_items=_recent_bought(g.user.id, recent_start, recent_end),
         text=text, price=price, has_image=image_bytes is not None, today=today,
     )
 
@@ -126,15 +135,19 @@ def create_consult():
     for _attempt in range(AI_ATTEMPTS):
         try:
             raw = gemini_client.ask(prompt, image_bytes, image_mime)
-        except gemini_client.AIQuotaError:
+        except gemini_client.AIQuotaError as e:
+            print(f"[상담] AI 한도 초과: {e}", flush=True)
             return api_error(429, "AI_QUOTA_EXCEEDED",
                              "오늘 AI 상담 한도를 다 썼어요. 내일 다시 시도해 주세요.")
-        except gemini_client.AIUnavailableError:
-            return api_error(503, "AI_UNAVAILABLE", "AI가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요.")
+        except gemini_client.AIUnavailableError as e:
+            print(f"[상담] AI 응답 없음: {e}", flush=True)
+            return api_error(503, "AI_UNAVAILABLE",
+                             "AI 사용자가 몰려서 응답하지 않아요. 잠시 후 다시 시도해 주세요.")
         try:
             result = parse_ai_response(raw)
             break
-        except AIResponseError:
+        except AIResponseError as e:
+            print(f"[상담] AI 답변 형식 오류: {e} / 앞부분: {str(raw)[:120]!r}", flush=True)
             continue
     if result is None:
         return api_error(503, "AI_UNAVAILABLE", "AI 답변을 이해하지 못했어요. 다시 시도해 주세요.")
@@ -147,25 +160,47 @@ def create_consult():
     if final_price is None:
         return api_error(422, "PRICE_REQUIRED", "가격을 알아보지 못했어요. 가격을 직접 입력해 주세요.")
 
-    apply_guards(result, final_price, remaining)
+    category = result["category"]
+    is_focus = category in focus
+    limit = focus.get(category) if is_focus else None
+    guards = apply_guards(result, final_price, remaining, limit)
+    outcomes = compute_outcomes(final_price, remaining, _saved_total(g.user.id),
+                                setting.goal_amount, daily)
 
     consult = Consult(
         user_id=g.user.id,
         input_type="IMAGE" if image_bytes is not None else "TEXT",
         item_name=result["item_name"],
         price=final_price,
-        category=result["category"],
+        category=category,
         verdict=result["verdict"],
         reason=result["reason"],
         alternatives=result["alternatives"],
-        delay_days=calc_delay_days(final_price, daily),
+        delay_days=outcomes["delay_days"],
     )
     db.session.add(consult)
     db.session.commit()
 
+    # 꼽주기: 내가 줄이겠다고 고른 지출이면, 최근 14일 같은 종류 구매를 코드가 직접 센 값
+    nag = None
+    if is_focus:
+        same = next((st for st in recent_stats if st["category"] == category), None)
+        if same and same["count"] > 0:
+            nag = {"days": NAG_DAYS, "count": same["count"], "amount": same["amount"]}
+
     body = consult_to_dict(consult)
-    body["remaining_budget"] = remaining
-    body["message"] = result["message"]
+    body.update({
+        "message": result["message"],
+        "remaining_budget": remaining,
+        "remaining_after": outcomes["remaining_after"],
+        "progress_now": outcomes["progress_now"],
+        "progress_after": outcomes["progress_after"],
+        "is_focus": is_focus,
+        "nag": nag,
+        "limit": ({"amount": limit, "over_by": final_price - limit}
+                  if limit is not None and "limit" in guards else None),
+        "guards": guards,
+    })
     return jsonify(body), 201
 
 

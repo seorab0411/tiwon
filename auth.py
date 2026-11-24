@@ -59,6 +59,9 @@ def signup():
     clean, errors = validate_signup(data)
     if errors:
         return api_error(400, "INVALID_INPUT", errors[0])
+    # 비밀번호 확인칸 (화면에서 보낼 때만 검사. 다르면 가입 안 함)
+    if "password_confirm" in data and data.get("password_confirm") != data.get("password"):
+        return api_error(400, "PASSWORD_MISMATCH", "비밀번호가 일치하지 않아요.")
 
     if User.query.filter_by(username=clean["username"]).first():
         return api_error(409, "USERNAME_TAKEN", "이미 쓰고 있는 아이디예요.")

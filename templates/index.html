@@ -29,29 +29,40 @@
 <section class="card card-accent">
   <h2 class="section-title">이거 사도 될까?</h2>
   <form class="stack" id="consult-form" novalidate>
-    <div class="field">
-      <label for="consult-text">무엇을 사려고 해요?</label>
-      <textarea class="input" id="consult-text" name="text" rows="2" maxlength="500"
-                placeholder="예) 배달 치킨 25000원, 친구 생일선물 3만원"></textarea>
+    <input class="visually-hidden" id="consult-image" name="image" type="file"
+           accept="image/*" capture="environment">
+    <label class="camera-btn" for="consult-image" id="camera-btn">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 8h3l2-3h6l2 3h3v11H4z"></path><circle cx="12" cy="13" r="3.5"></circle>
+      </svg>
+      <span class="camera-title">사진 찍어서 물어보기</span>
+      <span class="camera-sub">상품·가격표·메뉴판·장바구니 캡처</span>
+    </label>
+    <div class="photo-preview" id="photo-preview" hidden>
+      <img id="photo-img" alt="찍은 사진 미리보기">
+      <div class="photo-actions">
+        <label class="btn btn-sm" for="consult-image">다시 찍기</label>
+        <button class="btn btn-sm" id="photo-remove" type="button">사진 빼기</button>
+      </div>
     </div>
     <div class="row-2">
       <div class="field">
-        <label for="consult-price">가격 (선택)</label>
-        <input class="input" id="consult-price" name="price" inputmode="numeric" placeholder="25000">
+        <label for="consult-text">메모 (선택)</label>
+        <input class="input" id="consult-text" name="text" maxlength="500" placeholder="예) 배달 치킨">
       </div>
       <div class="field">
-        <label for="consult-image">캡처·사진 (선택)</label>
-        <input class="input" id="consult-image" name="image" type="file"
-               accept="image/jpeg,image/png,image/webp">
+        <label for="consult-price">가격 (선택)</label>
+        <input class="input" id="consult-price" name="price" inputmode="numeric" placeholder="예) 25000">
       </div>
     </div>
-    <span class="help">글이나 사진 중 하나만 있어도 돼요. 사진은 5MB 이하.</span>
+    <span class="help">사진 없이 메모만 적어서 물어봐도 돼요.</span>
     <div class="alert-error" id="consult-error" role="alert" hidden></div>
     <button class="btn btn-primary btn-lg btn-block" id="consult-submit" type="submit">AI에게 물어보기</button>
   </form>
 </section>
 
-<section class="card" id="result-card" hidden aria-live="polite">
+<section class="card" id="result-card" hidden aria-live="polite" data-goal="{{ setting.goal_name }}">
   <div class="result-head">
     <div>
       <div class="result-item" id="result-item"></div>
@@ -59,21 +70,26 @@
     </div>
     <span class="chip chip-lg" id="result-verdict"></span>
   </div>
+  <p class="callout callout-nag" id="result-nag" hidden></p>
+  <p class="callout callout-warn" id="result-limit" hidden></p>
   <p class="quote" id="result-message"></p>
   <p class="muted small" id="result-reason"></p>
-  <div class="tiles">
-    <div class="tile">
-      <span class="muted small">사면 목표가</span>
-      <span class="tile-value" id="result-delay"></span>
+  <div class="paths">
+    <div class="path">
+      <span class="path-title">지금 사면</span>
+      <span class="path-main" id="now-main"></span>
+      <span class="help" id="now-sub"></span>
     </div>
-    <div class="tile">
-      <span class="muted small">지금 남은 예산</span>
-      <span class="tile-value" id="result-remaining"></span>
+    <div class="path">
+      <span class="path-title">다른 곳에서 사면</span>
+      <ul class="alts" id="result-alternatives"></ul>
+      <span class="help" id="alts-empty" hidden>AI가 더 싸게 사는 방법을 찾지 못했어요.</span>
     </div>
-  </div>
-  <div id="result-alternatives-box">
-    <p class="small strong">이렇게 해보면 어때요?</p>
-    <ul class="alts" id="result-alternatives"></ul>
+    <div class="path path-save">
+      <span class="path-title">아끼면</span>
+      <span class="path-main" id="save-main"></span>
+      <span class="help" id="save-sub"></span>
+    </div>
   </div>
   <div class="actions">
     <button class="btn btn-lg" id="result-bought" type="button">샀어요</button>
@@ -207,24 +223,53 @@
   function showResult(c) {
     currentConsultId = c.consult_id;
     const v = verdictOf(c.verdict);
+    const card = document.getElementById("result-card");
+    const goal = card.dataset.goal;
     document.getElementById("result-item").textContent = c.item_name;
-    document.getElementById("result-meta").textContent = won(c.price) + " · " + c.category;
+    document.getElementById("result-meta").textContent =
+      won(c.price) + " · " + c.category + (c.is_focus ? " · 줄이기로 한 지출" : "");
     const badge = document.getElementById("result-verdict");
     badge.className = "chip chip-lg " + v.cls;
     badge.textContent = v.label;
+
+    // 꼽주기: 최근 14일 같은 종류 구매 (서버가 DB에서 센 숫자)
+    const nag = document.getElementById("result-nag");
+    if (c.nag) {
+      nag.textContent = "최근 " + c.nag.days + "일 동안 " + c.category + "에 벌써 " + c.nag.count +
+        "번, " + won(c.nag.amount) + " 썼어요. 이번이 " + (c.nag.count + 1) + "번째예요.";
+    }
+    nag.hidden = !c.nag;
+
+    // 한 번 기준 금액 초과
+    const limit = document.getElementById("result-limit");
+    if (c.limit) {
+      limit.textContent = c.category + " 한 번 기준 " + won(c.limit.amount) + "보다 " +
+        won(c.limit.over_by) + " 비싸요.";
+    }
+    limit.hidden = !c.limit;
+
     const message = document.getElementById("result-message");
     message.textContent = c.message || "";
     message.hidden = !c.message;
     document.getElementById("result-reason").textContent = c.reason;
-    document.getElementById("result-delay").textContent = c.delay_days + "일 늦어짐";
-    document.getElementById("result-remaining").textContent = won(c.remaining_budget);
+
+    // 지금 사면 / 다른 곳에서 사면 / 아끼면
+    document.getElementById("now-main").textContent =
+      "남은 예산 " + won(c.remaining_budget) + " → " + won(c.remaining_after);
+    document.getElementById("now-sub").textContent =
+      goal + " 목표가 " + c.delay_days + "일 늦어져요" + (c.remaining_after < 0 ? " · 예산 초과" : "");
+    document.getElementById("now-main").classList.toggle("danger", c.remaining_after < 0);
     const alts = document.getElementById("result-alternatives");
     alts.replaceChildren();
     c.alternatives.forEach((a) => alts.appendChild(el("li", "", a)));
-    document.getElementById("result-alternatives-box").hidden = c.alternatives.length === 0;
+    document.getElementById("alts-empty").hidden = c.alternatives.length > 0;
+    document.getElementById("save-main").textContent =
+      "목표 진행률 " + c.progress_now + "% → " + c.progress_after + "%";
+    document.getElementById("save-sub").textContent =
+      goal + " 목표가 " + c.delay_days + "일 빨라지고, " + won(c.price) + "이 모여요";
+
     boughtButton.disabled = false;
     skippedButton.disabled = false;
-    const card = document.getElementById("result-card");
     card.hidden = false;
     card.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -245,6 +290,72 @@
   boughtButton.addEventListener("click", () => decideCurrent("BOUGHT"));
   skippedButton.addEventListener("click", () => decideCurrent("SKIPPED"));
 
+  // ---------- 사진 촬영 ----------
+  // 휴대폰 사진은 5MB를 넘기 쉬워서, 보내기 전에 긴 변 1600px JPEG로 줄인다 (보통 300KB 안팎)
+  const MAX_SIDE = 1600;
+  let photoBlob = null;
+  const imageInput = document.getElementById("consult-image");
+  const preview = document.getElementById("photo-preview");
+  const previewImg = document.getElementById("photo-img");
+  const cameraButton = document.getElementById("camera-btn");
+
+  function loadImage(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = url;
+    });
+  }
+
+  async function shrinkPhoto(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await loadImage(url);
+      const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+      if (!blob) throw new Error("변환 실패");
+      return blob;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  function setPhoto(blob) {
+    if (previewImg.src) URL.revokeObjectURL(previewImg.src);
+    photoBlob = blob;
+    if (blob) {
+      previewImg.src = URL.createObjectURL(blob);
+    } else {
+      previewImg.removeAttribute("src");
+    }
+    preview.hidden = !blob;
+    cameraButton.hidden = !!blob;
+  }
+
+  imageInput.addEventListener("change", async () => {
+    const file = imageInput.files[0];
+    imageInput.value = "";  // 같은 사진을 다시 골라도 change가 일어나게
+    if (!file) return;
+    document.getElementById("consult-error").hidden = true;
+    try {
+      setPhoto(await shrinkPhoto(file));
+    } catch (e) {
+      const usable = ["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= 5 * 1024 * 1024;
+      if (usable) {
+        setPhoto(file);  // 줄이지 못하면 원본 그대로 (형식·크기가 괜찮을 때만)
+      } else {
+        showError("이 사진은 읽을 수 없어요. 다시 찍거나 jpg·png 사진을 골라 주세요.");
+      }
+    }
+  });
+  document.getElementById("photo-remove").addEventListener("click", () => setPhoto(null));
+
+  // ---------- 상담 보내기 ----------
   const form = document.getElementById("consult-form");
   const submit = document.getElementById("consult-submit");
   form.addEventListener("submit", async (event) => {
@@ -252,19 +363,14 @@
     document.getElementById("consult-error").hidden = true;
     const text = document.getElementById("consult-text").value.trim();
     const price = document.getElementById("consult-price").value.trim();
-    const image = document.getElementById("consult-image").files[0];
-    if (!text && !image) {
-      showError("상담 내용이나 사진 중 하나는 꼭 넣어 주세요.");
-      return;
-    }
-    if (image && image.size > 5 * 1024 * 1024) {
-      showError("사진은 5MB 이하만 올릴 수 있어요.");
+    if (!text && !photoBlob) {
+      showError("사진을 찍거나 메모를 적어 주세요.");
       return;
     }
     const data = new FormData();
     data.append("text", text);
     data.append("price", price);
-    if (image) data.append("image", image);
+    if (photoBlob) data.append("image", photoBlob, "photo.jpg");
 
     submit.disabled = true;
     submit.textContent = "AI가 생각하는 중...";
@@ -276,6 +382,7 @@
       return;
     }
     form.reset();
+    setPhoto(null);
     showResult(result.data);
     loadHistory();
   });

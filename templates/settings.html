@@ -6,22 +6,51 @@
   <p class="muted small">AI가 "사도 될지" 판단하는 기준이에요.</p>
 </div>
 
+{% set examples = {"식비·배달": "예) 12000", "카페": "예) 4500", "쇼핑": "예) 30000", "게임": "예) 10000", "편의점·마트": "예) 10000", "술·유흥": "예) 30000", "구독 서비스": "예) 10000", "담배": "예) 4500"} %}
 <form class="card" id="settings-form" novalidate>
+  <fieldset class="field fieldset">
+    <legend class="label">티원이 어떤 지출을 집중적으로 줄여드릴까요?</legend>
+    <span class="help">여러 개 고를 수 있어요 · 1개 이상 필수</span>
+    <div class="theme-grid">
+      {% for t in themes %}
+      <label class="theme-chip">
+        <input type="checkbox" name="focus" value="{{ t }}" {% if t in focus %}checked{% endif %}>
+        <span>{{ t }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <div class="field" id="limits-box">
+    <span class="label">한 번에 쓸 기준 금액 <span class="help">(선택)</span></span>
+    <span class="help">고른 지출마다 정할 수 있어요. 이 금액보다 비싸면 티원이 한 번 잡아줘요.</span>
+    {% for t in themes %}
+    <div class="limit-row" data-theme="{{ t }}" {% if t not in focus %}hidden{% endif %}>
+      <label for="limit-{{ loop.index }}">{{ t }}</label>
+      <input class="input" id="limit-{{ loop.index }}" data-limit-for="{{ t }}" inputmode="numeric"
+             placeholder="{{ examples[t] if t in examples else '예) 10000' }}"
+             value="{{ focus[t] if focus.get(t) else '' }}">
+      <span class="muted small">원</span>
+    </div>
+    {% endfor %}
+    <p class="help" id="limits-empty">위에서 줄이고 싶은 지출을 고르면 여기에 칸이 생겨요.</p>
+  </div>
+
   <div class="field">
     <label for="monthly_budget">한 달 예산 (원)</label>
     <input class="input" id="monthly_budget" name="monthly_budget" inputmode="numeric"
-           placeholder="500000" value="{{ setting.monthly_budget if setting else '' }}" required>
+           placeholder="예) 500000" value="{{ setting.monthly_budget if setting else '' }}" required>
   </div>
   <div class="field">
     <label for="goal_name">모으고 싶은 목표</label>
     <input class="input" id="goal_name" name="goal_name" maxlength="50"
-           placeholder="노트북" value="{{ setting.goal_name if setting else '' }}" required>
+           placeholder="예) 노트북" value="{{ setting.goal_name if setting else '' }}" required>
   </div>
   <div class="row-2">
     <div class="field">
       <label for="goal_amount">목표 금액 (원)</label>
       <input class="input" id="goal_amount" name="goal_amount" inputmode="numeric"
-             placeholder="1500000" value="{{ setting.goal_amount if setting else '' }}" required>
+             placeholder="예) 1500000" value="{{ setting.goal_amount if setting else '' }}" required>
     </div>
     <div class="field">
       <label for="goal_deadline">목표 날짜</label>
@@ -47,10 +76,36 @@
   const form = document.getElementById("settings-form");
   const submit = document.getElementById("settings-submit");
   const errorBox = document.getElementById("settings-error");
+  const themeBoxes = Array.from(form.querySelectorAll('input[name="focus"]'));
+
+  // 고른 테마만 기준 금액 칸 보이기
+  function syncLimitRows() {
+    let shown = 0;
+    themeBoxes.forEach((box) => {
+      const row = form.querySelector('.limit-row[data-theme="' + box.value + '"]');
+      row.hidden = !box.checked;
+      if (box.checked) shown += 1;
+    });
+    document.getElementById("limits-empty").hidden = shown > 0;
+  }
+  themeBoxes.forEach((box) => box.addEventListener("change", () => {
+    syncLimitRows();
+    errorBox.hidden = true;  // 테마를 고르면 '하나 이상 골라 주세요' 안내 닫기
+  }));
+  syncLimitRows();
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     errorBox.hidden = true;
+    const focus = {};
+    themeBoxes.filter((box) => box.checked).forEach((box) => {
+      focus[box.value] = form.querySelector('[data-limit-for="' + box.value + '"]').value.trim();
+    });
+    if (Object.keys(focus).length === 0) {
+      errorBox.textContent = "줄이고 싶은 지출을 하나 이상 골라 주세요.";
+      errorBox.hidden = false;
+      return;
+    }
     submit.disabled = true;
     const body = {
       monthly_budget: form.monthly_budget.value,
@@ -58,6 +113,7 @@
       goal_amount: form.goal_amount.value,
       goal_deadline: form.goal_deadline.value,
       tone: form.tone.value,
+      focus: focus,
     };
     const result = await apiRequest("PUT", "/api/settings", body);
     submit.disabled = false;

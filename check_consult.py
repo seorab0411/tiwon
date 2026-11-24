@@ -43,7 +43,7 @@ gemini_client.ask = fake_ask
 
 
 def ai(**kw):
-    base = {"recognized": True, "item_name": "에어팟 프로", "price": 350000, "category": "전자기기",
+    base = {"recognized": True, "item_name": "에어팟 프로", "price": 350000, "category": "쇼핑",
             "verdict": "CONDITIONAL", "reason": "목표가 늦어져요.", "alternatives": ["할인 때 사기"],
             "message": "조금만 참아봐!"}
     base.update(kw)
@@ -70,7 +70,8 @@ check("설정 전 상담 → 409 SETTINGS_REQUIRED", r.status_code == 409 and co
 r = c.get("/api/summary")
 check("설정 전 현황 → 409", r.status_code == 409)
 
-c.put("/api/settings", json={"monthly_budget": 500000, "goal_name": "노트북",
+c.put("/api/settings", json={"focus": {"식비·배달": 20000, "편의점·마트": None},
+                             "monthly_budget": 500000, "goal_name": "노트북",
                              "goal_amount": 900000, "goal_deadline": deadline, "tone": "roast"})
 
 # ---- 입력 검사 (AI 호출 전에 걸러져야 함) ----
@@ -105,7 +106,7 @@ check("프롬프트에 예산·목표·말투·사용자 글", "500,000원" in p
       and "에어팟 프로 사고 싶다" in p)
 first_id = body.get("consult_id")
 
-replies[:] = ["```json\n" + ai(item_name="샴푸", price=12000, category="생필품", verdict="BUY") + "\n```"]
+replies[:] = ["```json\n" + ai(item_name="샴푸", price=12000, category="편의점·마트", verdict="BUY") + "\n```"]
 r = consult(c, {"text": "샴푸 떨어짐"})
 check("```로 감싼 답도 처리 + 가격 AI가 찾음", r.status_code == 201 and r.get_json()["price"] == 12000)
 shampoo_id = r.get_json()["consult_id"]
@@ -118,7 +119,7 @@ replies[:] = [ai(verdict="BUY", price=600000)]
 r = consult(c, {"text": "모니터"})
 check("예산 넘는데 BUY → 안전장치로 CONDITIONAL", r.get_json()["verdict"] == "CONDITIONAL")
 
-replies[:] = [ai(category="게임")]
+replies[:] = [ai(category="택시")]
 r = consult(c, {"text": "게임 아이템", "price": "10000"})
 check("없는 분류는 기타로 저장", r.get_json()["category"] == "기타")
 
@@ -169,12 +170,12 @@ s = c.get("/api/summary").get_json()
 check("현황: 쓴 돈 11,000 (실제 가격 기준)", s["spent"] == 11000, s)
 check("현황: 남은 예산 489,000", s["remaining_budget"] == 489000)
 check("현황: 참은 돈 350,000, 진행률 38.9%", s["saved_total"] == 350000 and s["goal_progress"] == 38.9, s)
-check("현황: 분류별 (생필품 1회 11,000)", s["by_category"] == [{"category": "생필품", "count": 1, "amount": 11000}])
+check("현황: 분류별 (편의점·마트 1회 11,000)", s["by_category"] == [{"category": "편의점·마트", "count": 1, "amount": 11000}])
 
-replies[:] = [ai(item_name="린스", price=9000, category="생필품", verdict="BUY")]
+replies[:] = [ai(item_name="린스", price=9000, category="편의점·마트", verdict="BUY")]
 consult(c, {"text": "린스"})
 p = calls[-1]["prompt"]
-check("다음 상담 프롬프트에 남은 예산·최근 구매 반영", "489,000원" in p and "샴푸 11,000원" in p and "생필품 1회" in p)
+check("다음 상담 프롬프트에 남은 예산·최근 구매 반영", "489,000원" in p and "샴푸 11,000원" in p and "편의점·마트 1회" in p)
 
 lst = c.get("/api/consults").get_json()
 check("상담 기록: 최신순", lst["consults"][0]["item_name"] == "린스")
@@ -190,6 +191,52 @@ r = c2.patch(f"/api/consults/{shampoo_id}/decision", json={"decision": "SKIPPED"
 check("남의 상담은 기록 못 바꿈 (404)", r.status_code == 404)
 r = c2.get("/api/consults")
 check("남의 상담 기록은 안 보임", r.get_json()["consults"] == [])
+
+# ---- 줄이고 싶은 지출: 꼽주기·기준 금액·세 갈래 숫자 ----
+c3 = app.test_client()
+c3.post("/api/auth/signup", json={"username": "tiwon03", "password": "password123"})
+c3.put("/api/settings", json={"monthly_budget": 100000, "goal_name": "에어팟", "goal_amount": 300000,
+                              "goal_deadline": (today_kst() + timedelta(days=30)).isoformat(),
+                              "tone": "roast", "focus": {"식비·배달": 20000}})
+replies[:] = [ai(item_name="치킨", price=23000, category="식비·배달", verdict="SKIP")]
+b1 = consult(c3, {"text": "치킨"}).get_json()
+check("줄이기로 한 지출이면 is_focus", b1["is_focus"] is True)
+check("기록이 없으면 꼽주기 없음", b1["nag"] is None)
+check("기준 20,000원 초과 → 3,000원 비싸다고 표시", b1["limit"] == {"amount": 20000, "over_by": 3000}, b1["limit"])
+check("지금 사면: 남은 예산 100,000 → 77,000", b1["remaining_budget"] == 100000 and b1["remaining_after"] == 77000)
+check("지연일 = 23,000 ÷ 하루 10,000 올림 = 3일", b1["delay_days"] == 3, b1["delay_days"])
+check("아끼면: 진행률 0% → 7.7%", b1["progress_now"] == 0.0 and b1["progress_after"] == 7.7, (b1["progress_now"], b1["progress_after"]))
+c3.patch(f"/api/consults/{b1['consult_id']}/decision", json={"decision": "BOUGHT"})
+
+replies[:] = [ai(item_name="피자", price=18000, category="식비·배달", verdict="BUY")]
+b2 = consult(c3, {"text": "피자"}).get_json()
+check("꼽주기: 최근 14일 식비·배달 1번 23,000원", b2["nag"] == {"days": 14, "count": 1, "amount": 23000}, b2["nag"])
+check("기준 이하면 기준 경고 없음 + BUY 유지", b2["limit"] is None and b2["verdict"] == "BUY")
+p = calls[-1]["prompt"]
+check("프롬프트에 고른 지출·기준 금액·14일 기록", "- 식비·배달 (한 번에 20,000원까지)" in p
+      and "최근 14일 종류별 구매 횟수·금액: 식비·배달 1회 23,000원" in p and "치킨 23,000원" in p)
+
+replies[:] = [ai(item_name="떡볶이", price=25000, category="식비·배달", verdict="BUY")]
+b3 = consult(c3, {"text": "떡볶이"}).get_json()
+check("기준 초과인데 BUY → 안전장치로 CONDITIONAL", b3["verdict"] == "CONDITIONAL" and "limit" in b3["guards"])
+
+replies[:] = [ai(item_name="라떼", price=30000, category="카페", verdict="BUY")]
+b4 = consult(c3, {"text": "라떼"}).get_json()
+check("고르지 않은 지출(카페)은 꼽주기·기준 검사 없음", b4["is_focus"] is False and b4["nag"] is None
+      and b4["limit"] is None and b4["verdict"] == "BUY")
+
+with app.app_context():
+    from app import _migrate_categories
+    from models import Consult, User
+    u3 = User.query.filter_by(username="tiwon03").first()
+    db_old = Consult(user_id=u3.id, input_type="TEXT", item_name="옛날 기록", price=1000,
+                     category="배달", verdict="BUY", reason="r")
+    from models import db as _db
+    _db.session.add(db_old)
+    _db.session.commit()
+    _migrate_categories()
+    check("예전 종류 '배달' 기록은 서버 시작 때 '식비·배달'로 바뀜",
+          _db.session.get(Consult, db_old.id).category == "식비·배달")
 
 # ---- 화면 ----
 r = c.get("/")

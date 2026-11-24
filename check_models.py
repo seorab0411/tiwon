@@ -6,7 +6,7 @@ from flask import Flask
 from sqlalchemy import event, inspect
 from sqlalchemy.exc import IntegrityError
 
-from models import Consult, Setting, User, db
+from models import Consult, FocusTheme, Setting, User, db
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite://"
@@ -42,8 +42,8 @@ with app.app_context():
     db.create_all()
 
     tables = set(inspect(db.engine).get_table_names())
-    check("테이블 3개 생성 (users, settings, consults)",
-          {"users", "settings", "consults"} <= tables)
+    check("테이블 4개 생성 (users, settings, consults, focus_themes)",
+          {"users", "settings", "consults", "focus_themes"} <= tables)
 
     u = User(username="tiwon01", password_hash="hash")
     u2 = User(username="tiwon02", password_hash="hash")
@@ -58,7 +58,7 @@ with app.app_context():
     check("예산·목표 저장 + 말투 기본값 friend", s.tone == "friend")
 
     c = Consult(user_id=u.id, input_type="TEXT", item_name="에어팟 프로", price=350000,
-                category="전자기기", verdict="CONDITIONAL", reason="목표가 21일 늦어져요.",
+                category="쇼핑", verdict="CONDITIONAL", reason="목표가 21일 늦어져요.",
                 alternatives=["할인 때 구매", "중고 확인"], delay_days=21)
     db.session.add(c)
     db.session.commit()
@@ -95,11 +95,22 @@ with app.app_context():
     must_fail("잘못된 말투 막힘", setting(tone="angry"), "ck_settings_tone")
     must_fail("한 사람당 설정 1개만", setting(user_id=u.id), "UNIQUE")
 
+    db.session.add_all([FocusTheme(user_id=u.id, category="식비·배달", limit_amount=20000),
+                        FocusTheme(user_id=u.id, category="게임")])
+    db.session.commit()
+    check("줄이고 싶은 지출 저장 (기준 금액 있음·없음)",
+          db.session.get(User, u.id).focus_map() == {"식비·배달": 20000, "게임": None})
+    must_fail("기준 금액 0원 막힘", FocusTheme(user_id=u2.id, category="카페", limit_amount=0),
+              "ck_focus_limit")
+    db.session.expunge_all()
+    must_fail("같은 테마 두 번 저장 막힘", FocusTheme(user_id=u.id, category="게임"), "UNIQUE")
+
     db.session.delete(db.session.get(User, u.id))
     db.session.commit()
     check("사용자 삭제 시 설정·상담도 함께 삭제",
           db.session.query(Setting).filter_by(user_id=u.id).count() == 0
-          and db.session.query(Consult).count() == 0)
+          and db.session.query(Consult).count() == 0
+          and db.session.query(FocusTheme).filter_by(user_id=u.id).count() == 0)
 
 passed = sum(results)
 print(f"\n결과: {passed}/{len(results)} 통과")

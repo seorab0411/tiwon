@@ -29,6 +29,12 @@
              autocomplete="current-password" required>
       <span class="help" id="password-help" hidden>8~64자</span>
     </div>
+    <div class="field" id="confirm-field" hidden>
+      <label for="password_confirm">비밀번호 확인</label>
+      <input class="input" id="password_confirm" name="password_confirm" type="password"
+             autocomplete="new-password">
+      <span class="help" id="confirm-status" aria-live="polite"></span>
+    </div>
     <div class="alert-error" id="auth-error" role="alert" hidden></div>
     <button class="btn btn-primary btn-lg btn-block" id="auth-submit" type="submit">로그인</button>
   </form>
@@ -50,18 +56,41 @@
       document.getElementById("username-help").hidden = !isSignup;
       document.getElementById("password-help").hidden = !isSignup;
       document.getElementById("password").autocomplete = isSignup ? "new-password" : "current-password";
+      document.getElementById("confirm-field").hidden = !isSignup;
       errorBox.hidden = true;
     });
   });
 
+  // 비밀번호 확인: 입력할 때마다 일치 여부 표시
+  const confirmStatus = document.getElementById("confirm-status");
+  function updateConfirm() {
+    const confirm = form.password_confirm.value;
+    if (!confirm) {
+      confirmStatus.textContent = "";
+      return;
+    }
+    const same = confirm === form.password.value;
+    confirmStatus.textContent = same ? "✓ 비밀번호가 일치해요" : "비밀번호가 일치하지 않아요";
+    confirmStatus.className = "help " + (same ? "ok" : "danger");
+  }
+  form.password.addEventListener("input", updateConfirm);
+  form.password_confirm.addEventListener("input", updateConfirm);
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     errorBox.hidden = true;
+    if (mode === "signup" && form.password.value !== form.password_confirm.value) {
+      errorBox.textContent = "비밀번호가 일치하지 않아요.";
+      errorBox.hidden = false;
+      form.password_confirm.focus();
+      return;
+    }
     submit.disabled = true;
     const body = {
       username: form.username.value,
       password: form.password.value,
     };
+    if (mode === "signup") body.password_confirm = form.password_confirm.value;
     const result = await apiRequest("POST", "/api/auth/" + mode, body);
     submit.disabled = false;
     if (result.ok) {
